@@ -23,11 +23,8 @@ const PANE = {
 const SURFACES = ['terminal', 'desktop', 'vscode', 'mobile'] as const
 
 const SETUP_FILE = 'docs/agents/issue-tracker.md'
-// The mattpocock/skills repo, set up with the local markdown tracker.
-const SKILLS_REPO = {
-  [SETUP_FILE]: '# Issue tracker: Local Markdown\n',
-  '.claude-plugin/plugin.json': '{ "name": "mattpocock-skills" }',
-}
+// A project set up with the local markdown tracker.
+const LOCAL = { [SETUP_FILE]: '# Issue tracker: Local Markdown\n' }
 const GITHUB = { [SETUP_FILE]: '# Issue tracker: GitHub\n' }
 
 type World = {
@@ -37,13 +34,20 @@ type World = {
   stored?: unknown
   // Other projects' progress in the same store, by their roots.
   others?: Record<string, unknown>
+  // What the person has half typed in the prompt box.
+  draft?: string
+  // The title `git log` gives the last commit.
+  commit?: string
 }
 
 const DAY = 86_400_000
 
 // Stands for the engine beneath the plugin. The files given predate the
 // session; those `write` adds come later, newer than anything the plugin timed.
-const engine = (on: Parameters<TestBody>[1], { files = SKILLS_REPO, stored, others = {} }: World = {}) => {
+const engine = (
+  on: Parameters<TestBody>[1],
+  { files = LOCAL, stored, others = {}, draft = '', commit = 'Add a login page' }: World = {},
+) => {
   const disk = new Map(Object.entries(files).map(([path, text]) => [path, { text, mtimeMs: 0 }]))
   const rel = (path: string) => (path.startsWith(`${REPO}/`) ? path.slice(REPO.length + 1) : path)
   const filled: { text: string; mode?: string }[] = []
@@ -110,10 +114,28 @@ const engine = (on: Parameters<TestBody>[1], { files = SKILLS_REPO, stored, othe
 
     return { isShown: true }
   })
+  on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
+  // The repo's HEAD, moved by each commit Bash runs; a `--dry-run` moves nothing.
+  let head = 0
+  // `git rev-parse HEAD` answers the HEAD; `git log -1 --format=%s` the last commit's title.
+  on('process.run', (_, e) => ({
+    value: {
+      exitCode: 0,
+      stdout: `${e.argv.includes('rev-parse') ? `h${head}` : commit}\n`,
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
   on('turn.complete', () => ({ text: '' }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
-  on('tool.call', () => ({ result: {} }))
+  on('tool.call', (_, e) => {
+    if (e.tool === 'Bash' && /\bcommit\b/.test(e.command) && !/--dry-run/.test(e.command)) head += 1
+
+    return { result: {} }
+  })
 
   return {
     filled,
@@ -141,6 +163,9 @@ const seen = async ($: Engine, pattern: RegExp) => {
   return found?.text
 }
 
+// The pane card's title: the step under way (▶), else the next one (→).
+const card = ($: Engine) => seen($, /^[▶→] /)
+
 // The person typing `/name`, as the engine raises it.
 const typed = ($: Engine, name: string) =>
   $.prompt.submit({ text: `/${name}`, command: { name, args: '' }, wait: false, origin: { kind: 'composer' } })
@@ -152,7 +177,7 @@ test('a set-up project starts the beginner at grilling, on every surface', async
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await ui.find({ type: 'Text', text: /設定專案/ }))?.text).toBe('✔ 1. 設定專案')
-    expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ 2. 把想法問清楚')
+    expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('→ 2. 把想法問清楚')
     await ui.unmount()
   }
 })
@@ -163,7 +188,7 @@ test('progress saved by 0.2 carries over: its steps passed, its rounds finished 
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /把想法問清楚/ }))?.text).toBe('✔ 2. 把想法問清楚')
-  expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ 4. 切成任務卡')
+  expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('→ 4. 切成任務卡')
   expect(await ui.find({ type: 'Text', text: /已完成 2 個功能/ })).toBeDefined()
   // Its spec passed with no folder on record to name the feature by.
   expect((await ui.find({ type: 'Text', text: /進行中/ }))?.text).toBe('功能進行中')
@@ -176,15 +201,23 @@ test('progress 0.2 left on a finished round loads as a finished feature, not a s
 
   expect(await seen($, /已完成/)).toMatch(/已完成 2 個功能/)
   expect(await seen($, /進行中/)).toBe('還沒有進行中的功能')
-  expect(await seen($, /▶/)).toBe('▶ 2. 把想法問清楚')
+  expect(await card($)).toBe('→ 2. 把想法問清楚')
 })
 
-test('a skill the person types moves the guide on', async ($, on) => {
+test('a step the person types is under way, not passed: ▶ until the next step starts, then ✔', async ($, on) => {
   engine(on)
   await start($)
   await typed($, 'mattpocock-skills:grill-with-docs')
 
-  expect(await seen($, /▶/)).toBe('▶ 3. 動手做')
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
+  expect(await seen($, /之後/)).toBe('   問題問完之後：/implement')
+  expect(await seen($, /動手做/)).toBe('○ 3. 動手做')
+  expect(await seen($, /\d \/ \d/)).toBe('1 / 5')
+
+  await typed($, 'implement')
+  expect(await seen($, /把想法問清楚/)).toBe('✔ 2. 把想法問清楚')
+  expect(await card($)).toBe('▶ 3. 動手做（進行中）')
+  expect(await seen($, /\d \/ \d/)).toBe('2 / 5')
 })
 
 test('the pane is a dashboard on every surface: the card offers skip and stuck, nothing that runs or passes a step', async ($, on) => {
@@ -205,30 +238,57 @@ test('the pane is a dashboard on every surface: the card offers skip and stuck, 
   }
 })
 
-test('skip on the pane works like /matt-flow skip, and a skipped step looks unlike a passed one', async ($, on) => {
+test('skip on the pane works like /matt-flow skip: it passes over the next step, and a skipped step looks unlike a passed one', async ($, on) => {
   const { toasts } = engine(on)
   await start($)
   await typed($, 'grill-with-docs')
+  await typed($, 'implement')
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'skip' })
-  expect(toasts.at(-1)).toBe('↷ 跳過「動手做」→ 下一步 /code-review')
+  expect(toasts.at(-1)).toBe('↷ 跳過「檢查」→ 下一步 /retro')
   expect((await ui.find({ type: 'Text', text: /把想法問清楚/ }))?.text).toBe('✔ 2. 把想法問清楚')
-  expect((await ui.find({ type: 'Text', text: /動手做/ }))?.text).toBe('↷ 3. 動手做（跳過）')
-  expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ 4. 檢查')
+  expect((await ui.find({ type: 'Text', text: /檢查/ }))?.text).toBe('↷ 4. 檢查（跳過）')
+  expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('▶ 3. 動手做（進行中）')
   await ui.unmount()
 })
 
-test('stuck puts /ask-matt with where the person is into the prompt box, keeping their draft', async ($, on) => {
-  const { filled } = engine(on)
+test('a skip passes over the step in the way: the next one, so the one under way still passes as it should', async ($, on) => {
+  engine(on, { files: GITHUB, stored: { level: 'intermediate' } })
+  await start($)
+  await typed($, 'grill-with-docs')
+  expect((await typed($, 'to-tickets')).drop).toMatch(/下一步是「寫成規格書」/)
+
+  expect(await flow($, 'skip')).toBe('↷ 跳過「寫成規格書」→ 下一步 /to-tickets')
+  expect((await typed($, 'to-tickets')).drop).toBeUndefined()
+  expect(await seen($, /把想法問清楚/)).toBe('✔ 2. 把想法問清楚')
+  expect(await card($)).toBe('▶ 4. 切成任務卡（進行中）')
+})
+
+test('a step under way that cannot be left is the one a skip passes over: a spec never written lets the tickets go on without files', async ($, on) => {
+  engine(on, { stored: { level: 'intermediate' } })
+  await start($)
+  await typed($, 'grill-with-docs')
+  await typed($, 'to-spec')
+  expect((await typed($, 'to-tickets')).drop).toMatch(/「寫成規格書」還沒做完/)
+
+  expect(await flow($, 'skip')).toBe('↷ 跳過「寫成規格書」→ 下一步 /to-tickets')
+  expect((await typed($, 'to-tickets')).drop).toBeUndefined()
+  // No spec, so no folder to look in: the tickets wait for nothing.
+  expect((await typed($, 'implement')).drop).toBeUndefined()
+  expect(await card($)).toBe('▶ 5. 動手做（進行中）')
+})
+
+test('stuck puts /ask-matt with where the person is into the prompt box, the command first and their draft after it', async ($, on) => {
+  const { filled } = engine(on, { draft: '為什麼一直被擋' })
   await start($)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'stuck' })
   expect(filled).toEqual([
     {
-      text: '/ask-matt 我在 Matt 導航的「新手」流程，卡在「把想法問清楚」(/grill-with-docs)。沒有跳過步驟。現在會被擋：改程式碼（Edit、Write、NotebookEdit）。我遇到的狀況是：',
-      mode: 'insert',
+      text: '/ask-matt 我在 Matt 導航的「新手」流程，卡在「把想法問清楚」(/grill-with-docs)。沒有跳過步驟。現在會被擋：改程式碼（Edit、Write、NotebookEdit）。我遇到的狀況是：為什麼一直被擋',
+      mode: 'replace',
     },
   ])
   await ui.unmount()
@@ -251,13 +311,14 @@ test('stuck tells /ask-matt the steps skipped, what is locked, and how long the 
   at(0)
   await start($)
   await typed($, 'grill-with-docs')
+  await typed($, 'implement')
   await flow($, 'skip')
   at(4 * DAY)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'stuck' })
   expect(filled.at(-1)?.text).toBe(
-    '/ask-matt 我在 Matt 導航的「新手」流程，卡在「檢查」(/code-review)。跳過了「動手做」。現在會被擋：git commit。4 天沒動。我遇到的狀況是：',
+    '/ask-matt 我在 Matt 導航的「新手」流程，卡在「動手做」(/implement)。跳過了「檢查」。現在會被擋：git commit。4 天沒動。我遇到的狀況是：',
   )
   await ui.unmount()
 })
@@ -269,7 +330,8 @@ test('inside a feature the person started, a skill the model runs through the Sk
   await typed($, 'implement')
   await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:code-review' })
 
-  expect(await seen($, /▶/)).toBe('▶ 5. 複盤')
+  expect(await seen($, /動手做/)).toBe('✔ 3. 動手做')
+  expect(await card($)).toBe('▶ 4. 檢查（進行中）')
 })
 
 test('only the person starts a feature: a skill the model runs with none under way starts nothing', async ($, on) => {
@@ -278,16 +340,16 @@ test('only the person starts a feature: a skill the model runs with none under w
   await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:grilling' })
 
   expect(await seen($, /進行中/)).toBe('還沒有進行中的功能')
-  expect(await seen($, /▶/)).toBe('▶ 2. 把想法問清楚')
+  expect(await card($)).toBe('→ 2. 把想法問清楚')
 })
 
-test('a later step typed before building moves nothing: building is not skipped, code stays locked', async ($, on) => {
+test('a later step typed before building runs and moves nothing: building is not skipped, code stays locked', async ($, on) => {
   engine(on)
   await start($)
   await typed($, 'grill-with-docs')
-  await typed($, 'code-review')
+  expect((await typed($, 'code-review')).drop).toBeUndefined()
 
-  expect(await seen($, /▶/)).toBe('▶ 3. 動手做')
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
   expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
 })
 
@@ -308,7 +370,7 @@ test('changing level while building goes on past the new level\'s building, code
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'level-expert' })
-  expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ 6. 開 PR 附證據')
+  expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('→ 6. 開 PR 附證據')
   await ui.unmount()
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
 })
@@ -320,7 +382,7 @@ test('an expert building in parallel who turns beginner goes on to code-review',
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'level-beginner' })
-  expect((await ui.find({ type: 'Text', text: /▶/ }))?.text).toBe('▶ 4. 檢查')
+  expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('→ 4. 檢查')
   await ui.unmount()
 })
 
@@ -334,7 +396,7 @@ test('the expert level builds in parallel', async ($, on) => {
   await ui.unmount()
 })
 
-test('a flow skill starts a feature, and the retro ends it: it counts, and the next starts from grilling', async ($, on) => {
+test('a feature is done once the person ends it with its retro under way: it counts, and the next starts from grilling', async ($, on) => {
   engine(on)
   await start($)
   expect(await seen($, /進行中/)).toBe('還沒有進行中的功能')
@@ -342,128 +404,214 @@ test('a flow skill starts a feature, and the retro ends it: it counts, and the n
   await typed($, 'grill-with-docs')
   expect(await seen($, /進行中/)).toBe('功能進行中')
   for (const skill of ['implement', 'code-review', 'retro']) await typed($, skill)
+  expect(await card($)).toBe('▶ 5. 複盤（進行中）')
+  expect(await seen($, /之後/)).toBe('   複盤建議的環境改完之後：/matt-flow end')
+  expect(await seen($, /已完成/)).toMatch(/已完成 0 個功能/)
 
+  expect(await flow($, 'end')).toBe('🎉 功能結束，已完成 1 個功能 → 下一個從 /grill-with-docs 開始')
   expect(await seen($, /已完成/)).toMatch(/已完成 1 個功能/)
-  expect(await seen($, /▶/)).toBe('▶ 2. 把想法問清楚')
-  expect(await seen($, /把想法問清楚/)).toBe('▶ 2. 把想法問清楚')
-  expect(await seen($, /收尾/)).toMatch(/收尾中/)
+  expect(await card($)).toBe('→ 2. 把想法問清楚')
 })
 
-test('after the retro, code stays open for the wrap-up until the person ends it', async ($, on) => {
+test('while the retro is under way code stays open for its changes, until the person ends the feature', async ($, on) => {
   const { toasts } = engine(on)
   await start($)
   for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro']) await typed($, skill)
 
-  expect(toasts.at(-1)).toBe('🎉 功能結束，已完成 1 個功能 → 收尾：改完環境輸入 /matt-flow end，下一個從 /grill-with-docs 開始')
+  expect(toasts.at(-1)).toBe('✔ 檢查 通過 · ▶ 開始「複盤」：複盤建議的環境改完之後，下一步 /matt-flow end')
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
-  // Grilling the model runs for a triage meanwhile starts nothing and leaves the wrap-up be.
+  // Grilling the model runs for a triage meanwhile moves nothing.
   await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:grilling' })
-  expect(await seen($, /收尾/)).toMatch(/收尾中/)
+  expect(await card($)).toBe('▶ 5. 複盤（進行中）')
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
-  expect(await flow($, 'end')).toBe('收尾結束 → 下一步 /grill-with-docs')
+  await flow($, 'end')
   expect((await edit($, 'src/app.ts')).deny).toMatch(/\/grill-with-docs/)
 })
 
-test('the next feature ends the wrap-up', async ($, on) => {
-  engine(on)
+test('typing /grill-with-docs with the retro under way ends that feature done and starts the next', async ($, on) => {
+  const { toasts } = engine(on)
   await start($)
   for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro', 'grill-with-docs']) await typed($, skill)
 
+  expect(toasts.at(-1)).toBe('🎉 功能結束，已完成 1 個功能 · ▶ 開始「把想法問清楚」：問題問完之後，下一步 /implement')
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
   expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
 })
 
-test('a single-turn step hands over: a toast now, the next command suggested when the turn ends', async ($, on) => {
+test('the next command goes in the prompt box once the step is seen done: after code-review ran, not as /implement starts', async ($, on) => {
   const { suggested, toasts } = engine(on)
   await start($)
   await typed($, 'grill-with-docs')
   await typed($, 'implement')
-
-  expect(toasts.at(-1)).toBe('✔ 動手做 通過 → 下一步 /code-review')
-  expect(suggested).toEqual([])
+  expect(toasts.at(-1)).toBe('✔ 把想法問清楚 通過 · ▶ 開始「動手做」：寫完之後，下一步 /code-review')
   await turnEnds($)
-  expect(suggested).toEqual(['/code-review'])
+  expect(suggested).toEqual([])
+
+  await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:code-review' })
+  expect(toasts.at(-1)).toBe('✔ 動手做 通過 · ▶ 開始「檢查」：檢查完之後，下一步 /retro')
+  await turnEnds($)
+  expect(suggested).toEqual(['/retro'])
+  // Offered once, not again every turn.
+  await turnEnds($)
+  expect(suggested).toEqual(['/retro'])
 })
 
-test('a step that takes many turns hands over once done, not on starting: nothing is suggested', async ($, on) => {
+test('grilling and the retro are done when the person says so: neither offers the next command', async ($, on) => {
   const { suggested, toasts } = engine(on)
   await start($)
   await typed($, 'grill-with-docs')
   await turnEnds($)
-
   expect(toasts).toEqual(['▶ 開始「把想法問清楚」：問題問完之後，下一步 /implement'])
+  expect(suggested).toEqual([])
+
+  for (const skill of ['implement', 'code-review', 'retro']) await typed($, skill)
+  await turnEnds($)
   expect(suggested).toEqual([])
 })
 
-test('only the person typing /implement passes building: the model running tdd or implement does not', async ($, on) => {
+test('only the person starts building: the model running implement is told to hand over, tdd moves nothing', async ($, on) => {
   engine(on)
   await start($)
   await typed($, 'grill-with-docs')
 
-  await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:tdd' })
-  await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:implement' })
-  expect(await seen($, /▶/)).toBe('▶ 3. 動手做')
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:tdd' })).deny).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:implement' })).deny).toMatch(
+    /由人輸入 \/implement 才開始.*停下來/,
+  )
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
   await typed($, 'mattpocock-skills:implement')
-  expect(await seen($, /▶/)).toBe('▶ 4. 檢查')
+  expect(await card($)).toBe('▶ 3. 動手做（進行中）')
 })
 
-test('on the local tracker, spec and tickets pass on their files, written since the feature started', async ($, on) => {
+test('the model never settles a step for the person: running the next step itself is denied, the review after building aside', async ($, on) => {
+  engine(on, { files: GITHUB, stored: { level: 'intermediate' } })
+  await start($)
+  // With no feature under way, the model starts nothing and jumps nowhere either.
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:implement' })).deny).toMatch(/由人輸入 \/implement 才開始/)
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:to-spec' })).deny).toMatch(/還沒到「寫成規格書」/)
+
+  await typed($, 'grill-with-docs')
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:to-spec' })).deny).toMatch(
+    /「寫成規格書」要由人輸入 \/to-spec 才開始.*停下來交棒/,
+  )
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
+})
+
+test('while a step is under way a denied edit names the unlock command but does not prefill it: the person settles the step', async ($, on) => {
+  const { suggested } = engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+
+  expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
+  await turnEnds($)
+  expect(suggested).toEqual([])
+})
+
+test('a step typed ahead of the next one is dropped, naming the next step and /matt-flow skip; nothing moves', async ($, on) => {
+  const { toasts } = engine(on)
+  await start($)
+
+  expect((await typed($, 'implement')).drop).toBe(
+    'matt-flow：還沒到「動手做」。下一步是「把想法問清楚」：輸入 /grill-with-docs 加上你的想法；真的要跳過，先輸入 /matt-flow skip。',
+  )
+  expect(toasts).toEqual([])
+  expect(await seen($, /進行中/)).toBe('還沒有進行中的功能')
+  expect((await edit($, 'src/app.ts')).deny).toMatch(/\/grill-with-docs/)
+
+  // Skipping on purpose lets it through.
+  expect(await flow($, 'skip')).toBe('↷ 跳過「把想法問清楚」→ 下一步 /implement')
+  expect((await typed($, 'implement')).drop).toBeUndefined()
+  expect(await card($)).toBe('▶ 3. 動手做（進行中）')
+})
+
+test('a step after the next one is dropped while building too, and the model jumping is told to hand over', async ($, on) => {
+  engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+  await typed($, 'implement')
+
+  expect((await typed($, 'retro')).drop).toMatch(/還沒到「複盤」。下一步是「檢查」：輸入 \/code-review；/)
+  expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:retro' })).deny).toMatch(/還沒到「複盤」.*停下來/)
+  expect(await card($)).toBe('▶ 3. 動手做（進行中）')
+})
+
+test('on the local tracker, spec and tickets wait for their files, written since the feature started; then the next command is offered', async ($, on) => {
   const { suggested, write } = engine(on, {
-    files: { ...SKILLS_REPO, '.scratch/old/spec.md': '', '.scratch/old/issues/01-a.md': '' },
+    files: { ...LOCAL, '.scratch/old/spec.md': '', '.scratch/old/issues/01-a.md': '' },
     stored: { level: 'intermediate' },
   })
   await start($)
   await typed($, 'grill-with-docs')
   await typed($, 'to-spec')
   await turnEnds($)
-  expect(await seen($, /▶/)).toBe('▶ 3. 寫成規格書')
+  expect(await card($)).toBe('▶ 3. 寫成規格書（進行中）')
+  expect(suggested).toEqual([])
+  expect((await typed($, 'to-tickets')).drop).toBe(
+    'matt-flow：「寫成規格書」還沒做完：還沒看到 .scratch/<功能>/spec.md。做完再輸入 /to-tickets；真的要跳過，先輸入 /matt-flow skip。',
+  )
 
   write('.scratch/rail/spec.md')
   await turnEnds($)
-  expect(await seen($, /▶/)).toBe('▶ 4. 切成任務卡')
   expect(await seen($, /進行中/)).toBe('功能「rail」進行中')
-  expect(suggested.at(-1)).toBe('/to-tickets')
+  expect(suggested).toEqual(['/to-tickets'])
 
   await typed($, 'to-tickets')
   await turnEnds($)
-  expect(await seen($, /▶/)).toBe('▶ 4. 切成任務卡')
+  expect(await card($)).toBe('▶ 4. 切成任務卡（進行中）')
+  expect((await typed($, 'implement')).drop).toMatch(/還沒看到 \.scratch\/rail\/issues\/ 裡的任務卡/)
   write('.scratch/rail/issues/01-state-shape.md')
   await turnEnds($)
-  expect(await seen($, /▶/)).toBe('▶ 5. 動手做')
+  expect(suggested).toEqual(['/to-tickets', '/implement'])
+  await typed($, 'implement')
+  expect(await card($)).toBe('▶ 5. 動手做（進行中）')
 })
 
-test('an old feature\'s ticket touched before this feature has a spec does not pass its tickets', async ($, on) => {
-  const { write } = engine(on, { files: { ...SKILLS_REPO, '.scratch/old/issues/01-a.md': '' }, stored: { level: 'intermediate' } })
+test("an old feature's ticket touched meanwhile is not this feature's tickets", async ($, on) => {
+  const { write } = engine(on, { files: { ...LOCAL, '.scratch/old/issues/01-a.md': '' }, stored: { level: 'intermediate' } })
   await start($)
   await typed($, 'grill-with-docs')
+  await typed($, 'to-spec')
   write('.scratch/old/issues/01-a.md', 'Status: done')
-  await turnEnds($)
-  expect(await seen($, /切成任務卡/)).toBe('○ 4. 切成任務卡')
-
   write('.scratch/rail/spec.md')
   await turnEnds($)
-  expect(await seen($, /▶/)).toBe('▶ 4. 切成任務卡')
+  await typed($, 'to-tickets')
+
+  expect((await typed($, 'implement')).drop).toMatch(/還沒看到 \.scratch\/rail\/issues\//)
 })
 
-test('a step outside the level passes quietly: no toast, nothing offered', async ($, on) => {
+test('a beginner feature is not named or moved by a spec file written meanwhile', async ($, on) => {
+  const { write } = engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+  write('.scratch/rail/spec.md')
+  await turnEnds($)
+
+  expect(await seen($, /進行中/)).toBe('功能進行中')
+  expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
+})
+
+test('a step outside the level runs and moves nothing: no toast, nothing offered', async ($, on) => {
   const { suggested, toasts } = engine(on, { files: GITHUB })
   await start($)
   await typed($, 'grill-with-docs')
   await typed($, 'implement')
   const shown = toasts.length
-  await typed($, 'to-spec')
+  expect((await typed($, 'to-spec')).drop).toBeUndefined()
   await turnEnds($)
 
   expect(toasts.length).toBe(shown)
-  expect(suggested).toEqual(['/code-review'])
+  expect(suggested).toEqual([])
+  expect(await card($)).toBe('▶ 3. 動手做（進行中）')
 })
 
-test('on the GitHub tracker, spec and tickets pass when their skills run', async ($, on) => {
+test('on the GitHub tracker, spec and tickets have no files to wait for: each passes once the next step starts', async ($, on) => {
   engine(on, { files: GITHUB, stored: { level: 'intermediate' } })
   await start($)
-  for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets']) await typed($, skill)
+  for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement']) await typed($, skill)
 
-  expect(await seen($, /▶/)).toBe('▶ 5. 動手做')
-  // The spec passed, though no folder names the feature.
+  expect(await seen($, /切成任務卡/)).toBe('✔ 4. 切成任務卡')
+  expect(await card($)).toBe('▶ 5. 動手做（進行中）')
+  // No folder names the feature.
   expect(await seen($, /進行中/)).toBe('功能進行中')
 })
 
@@ -475,7 +623,7 @@ test('a project set up this turn hands over to grilling', async ($, on) => {
   await turnEnds($)
 
   expect(suggested).toEqual(['/grill-with-docs'])
-  expect(await seen($, /▶/)).toBe('▶ 2. 把想法問清楚')
+  expect(await card($)).toBe('→ 2. 把想法問清楚')
 })
 
 test('a project never set up stays quiet: skills there start nothing', async ($, on) => {
@@ -556,6 +704,9 @@ test('a beginner building cannot commit until code-review runs, then every later
 
   expect((await bash($, 'git commit -m "wip"')).deny).toMatch(/code-review/)
   expect((await bash($, `git -C ${REPO} commit -m "wip"`)).deny).toMatch(/code-review/)
+  for (const options of ['--no-pager -c user.name=x --git-dir=.git', '--work-tree /w', '--git-dir repo/.git', '-C "/a b"']) {
+    expect((await bash($, `git ${options} commit -m "wip"`)).deny).toMatch(/code-review/)
+  }
   await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:code-review' })
   expect((await bash($, 'git commit -m "feat"')).deny).toBeUndefined()
   expect((await bash($, 'git commit -m "fix review"')).deny).toBeUndefined()
@@ -613,11 +764,12 @@ test('a subagent finishing does not take the hand-over meant for the person', as
   await start($)
   await typed($, 'grill-with-docs')
   await typed($, 'implement')
+  await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:code-review' })
   await $.turn.complete({ answer: '', durationMs: 0, isAborted: false, turnId: 's', reason: 'answer', agentId: 'a1' })
   expect(suggested).toEqual([])
 
   await turnEnds($)
-  expect(suggested).toEqual(['/code-review'])
+  expect(suggested).toEqual(['/retro'])
 })
 
 test('a subagent running code-review does not unlock the commit', async ($, on) => {
@@ -734,6 +886,8 @@ test('while grilling, the rail names building as the next step, never as the ste
 
   const text = (await typed($, 'grill-with-docs')).context?.join()
   expect(text).toMatch(/下一步：動手做（\/implement）/)
+  expect(text).toMatch(/進行中：把想法問清楚（問題問完才算做完，由人決定什麼時候往下）/)
+  expect(text).toMatch(/流程的 skill 只能照順序跑，跳步的會被擋下；要跳過一步，由人輸入 \/matt-flow skip/)
   expect(text).not.toMatch(/目前的步驟/)
 })
 
@@ -766,6 +920,51 @@ test('a rewind or /clear takes the rail away, and the next prompt carries it aga
   expect(await said($, 'and again')).toEqual([])
   conversation.splice(0)
   expect(await rail($)).toMatch(/# matt-flow 軌道/)
+})
+
+// The engine dropping the session's state as /clear does: every value the plugin holds reads as never set, until written again.
+const clearable = (on: Parameters<TestBody>[1]) => {
+  const held = new Set<string>()
+  const dropped = new Set<string>()
+  on('state.get', { plugin: 'matt-flow' }, (_, e, next) => {
+    held.add(e.key)
+
+    return dropped.has(e.key) ? next(e).then(read => ({ value: { value: undefined, version: read.value?.version ?? 0 } })) : next(e)
+  })
+  on('state.set', { plugin: 'matt-flow' }, (_, e, next) => {
+    held.add(e.key)
+    dropped.delete(e.key)
+
+    return next(e)
+  })
+
+  return () => held.forEach(key => dropped.add(key))
+}
+
+test('after /clear, the next tool call or prompt finds the project again: its locks, its rail, its pane', async ($, on) => {
+  const clear = clearable(on)
+  const { conversation } = engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  clear()
+  conversation.splice(0)
+
+  expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
+  expect(await rail($)).toMatch(/下一步：動手做/)
+  expect(await seen($, /進行中/)).toBe('功能進行中')
+})
+
+test('after /clear, the commit gate holds too', async ($, on) => {
+  const clear = clearable(on)
+  engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+  await typed($, 'implement')
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  clear()
+
+  expect((await bash($, 'git commit -m "wip"')).deny).toMatch(/code-review/)
 })
 
 test('a project never set up gets no rail beside its prompts', async ($, on) => {
@@ -841,17 +1040,23 @@ test('/matt-flow skip skips the step the flow stands on, and says what is next',
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
 })
 
-test('/matt-flow end, or skipping the retro, ends the feature', async ($, on) => {
+test('a feature ended before its retro is aborted and does not count; one ended with its retro under way is done', async ($, on) => {
   engine(on)
   await start($)
   expect(await flow($, 'end')).toBe('沒有進行中的功能 → 下一步 /grill-with-docs')
 
   await typed($, 'grill-with-docs')
-  expect(await flow($, 'end')).toBe('🎉 功能結束，已完成 1 個功能 → 下一個從 /grill-with-docs 開始')
+  expect(await flow($, 'end')).toBe('⏹ 功能中止：沒做到複盤，不算完成 → 下一個從 /grill-with-docs 開始')
   expect(await seen($, /進行中/)).toBe('還沒有進行中的功能')
+  expect(await seen($, /已完成/)).toMatch(/已完成 0 個功能/)
 
+  // Skipping a retro never started leaves it undone.
   for (const step of ['把想法問清楚', '動手做', '檢查']) expect(await flow($, 'skip')).toMatch(step)
-  expect(await flow($, 'skip')).toBe('🎉 功能結束，已完成 2 個功能 → 下一個從 /grill-with-docs 開始')
+  expect(await flow($, 'skip')).toBe('⏹ 功能中止：沒做到複盤，不算完成 → 下一個從 /grill-with-docs 開始')
+
+  // A retro under way ran: skipping it, like ending the feature, finishes the feature done.
+  for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro']) await typed($, skill)
+  expect(await flow($, 'skip')).toBe('🎉 功能結束，已完成 1 個功能 → 下一個從 /grill-with-docs 開始')
 })
 
 test('/matt-flow all lists every project with progress, the longest left first, and marks a feature left over 3 days', async ($, on) => {
@@ -883,19 +1088,30 @@ test('/matt-flow all lists every project with progress, the longest left first, 
   )
 })
 
-test('a feature ended in the last 7 days shows under the overview, with how long it took and what it skipped', async ($, on) => {
+test('the overview lists the features ended in the last 7 days, how long each took and what it skipped, the aborted apart', async ($, on) => {
   const { at } = engine(on)
   at(DAY)
   await start($)
-  await typed($, 'grill-with-docs')
+  for (const skill of ['grill-with-docs', 'implement']) await typed($, skill)
+  // Skipping the review on purpose: the build is not held for one.
   await flow($, 'skip')
+  expect((await typed($, 'retro')).drop).toBeUndefined()
   at(3 * DAY)
   await flow($, 'end')
+  await typed($, 'grill-with-docs')
+  at(4 * DAY)
+  await flow($, 'end')
 
-  const ended = async () => (await flow($, 'all'))?.split('\n').at(-1)
-  expect(await ended()).toBe('最近 7 天結束的功能：/repo（2 天，跳過「動手做」）')
-  at(11 * DAY)
-  expect(await ended()).toBe('最近 7 天結束的功能：沒有')
+  const ended = async () => (await flow($, 'all'))?.split('\n').slice(-2)
+  expect(await ended()).toEqual([
+    '最近 7 天結束的功能：/repo（2 天，跳過「檢查」）',
+    '最近 7 天中止的功能：/repo（1 天）',
+  ])
+  at(12 * DAY)
+  expect(await ended()).toEqual([
+    '  /repo · 🌱 新手 · 還沒有進行中的功能 · 下一步 /grill-with-docs · 8 天沒動 · 已完成 1 個功能',
+    '最近 7 天結束的功能：沒有',
+  ])
 })
 
 test('a skill that moves nothing, a level change, or the rail turned off and on leaves the time the flow last moved', async ($, on) => {
@@ -948,14 +1164,18 @@ test('an intermediate building hands over both ways: the next ticket, or the ret
   const text = (await typed($, 'implement')).context?.join()
   await turnEnds($)
 
-  expect(toasts.at(-1)).toBe('✔ 動手做 通過 → 還有任務卡就 /clear 後 /implement 下一張，都做好了再 /retro')
+  expect(toasts.at(-1)).toBe(
+    '✔ 切成任務卡 通過 · ▶ 開始「動手做」：寫完之後，還有任務卡就 /clear 後 /implement 下一張，都做好了再 /retro',
+  )
   expect(suggested.slice(offered)).toEqual([])
   expect(text).toMatch(/還有任務卡就 \/clear 後 \/implement 下一張，都做好了再 \/retro/)
 
-  // The person starting the retro says every ticket is done: the next feature is offered as usual.
-  await typed($, 'retro')
-  await turnEnds($)
-  expect(suggested.at(-1)).toBe('/grill-with-docs')
+  // The next ticket is the step under way again; the retro waits for this build's code-review.
+  expect((await typed($, 'implement')).drop).toBeUndefined()
+  expect((await typed($, 'retro')).drop).toMatch(/「動手做」還沒做完：這次動手做還沒跑過 code-review。做完再輸入 \/retro/)
+  await typed($, 'code-review')
+  expect((await typed($, 'retro')).drop).toBeUndefined()
+  expect(await card($)).toBe('▶ 6. 複盤（進行中）')
 })
 
 test("an expert's /implement-spec hands over to /pr, not to another /implement", async ($, on) => {
@@ -963,37 +1183,28 @@ test("an expert's /implement-spec hands over to /pr, not to another /implement",
   await start($)
   for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement-spec']) await typed($, skill)
 
-  expect(toasts.at(-1)).toBe('▶ 開始「讓 AI 並行開發」：分身都合併之後，下一步 /pr')
+  expect(toasts.at(-1)).toBe('✔ 切成任務卡 通過 · ▶ 開始「讓 AI 並行開發」：分身都合併之後，下一步 /pr')
 })
 
-test('typing a later step runs it all the same, skipping the steps before it with a toast', async ($, on) => {
-  const { toasts } = engine(on, { files: GITHUB, stored: { level: 'intermediate' } })
+test('the feature takes the title of the first commit Claude makes while building, when no spec named it', async ($, on) => {
+  engine(on, { commit: 'Add a login page' })
   await start($)
-  await typed($, 'implement')
+  for (const skill of ['grill-with-docs', 'implement', 'code-review']) await typed($, skill)
+  await bash($, 'git commit -m "Add a login page"')
 
-  expect(toasts).toEqual([
-    '↷ 跳過「把想法問清楚」「寫成規格書」「切成任務卡」 · ✔ 動手做 通過 → 還有任務卡就 /clear 後 /implement 下一張，都做好了再 /retro',
-  ])
-  expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
-  // Steps run again mid-build still hand over both ways: the tickets are not all done.
-  await typed($, 'to-tickets')
-  expect(toasts.at(-1)).toBe(
-    '▶ 開始「切成任務卡」：任務卡切好之後，還有任務卡就 /clear 後 /implement 下一張，都做好了再 /retro',
-  )
+  expect(await seen($, /進行中/)).toBe('功能「Add a login page」進行中')
+  expect((await said($, 'hi')).join()).toMatch(/功能「Add a login page」進行中/)
 })
 
-test('an em-dash is denied inside the skills repo only', async ($, on) => {
+test('a commit before building, one denied, or one that moved nothing names nothing', async ($, on) => {
   engine(on)
-  await $.session.start({ cwd: REPO, surface: 'terminal', isInteractive: true })
+  await start($)
+  await typed($, 'grill-with-docs')
+  await bash($, 'git commit -m "Docs: a glossary"')
+  await typed($, 'implement')
+  await bash($, 'git commit -m "wip"')
+  await typed($, 'code-review')
+  await bash($, 'git commit --dry-run -m "wip"')
 
-  const edit = (file_path: string) =>
-    $.tool.call({
-      tool: 'Edit',
-      file_path,
-      old_string: 'a',
-      new_string: `a ${String.fromCharCode(0x2014)} b`,
-    })
-
-  expect((await edit(`${REPO}/README.md`)).deny).toMatch(/CLAUDE\.md/)
-  expect((await edit('/elsewhere/README.md')).deny).toBeUndefined()
+  expect(await seen($, /進行中/)).toBe('功能進行中')
 })
