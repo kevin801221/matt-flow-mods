@@ -111,9 +111,11 @@ matt-flow 是一條軌道：它記得每個專案走到流程的哪一步，把�
 
 | 等級 | 流程 |
 | --- | --- |
-| 🌱 新手 | `/setup-matt-pocock-skills` → `/grill-with-docs` → `/implement` → `/code-review` → `/retro` |
+| 🌱 新手 | `/setup-matt-pocock-skills` → `/grill-with-docs` → `/implement` → `/mattpocock-skills:code-review` → `/retro` |
 | 🚀 進階 | `/setup-matt-pocock-skills` → `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement` → `/retro` |
 | 👑 高手 | `/setup-matt-pocock-skills` → `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement-spec` → `/pr` → `/retro` |
+
+「檢查」要打全名 `/mattpocock-skills:code-review`：Claude Code 自己也有一個 `/code-review`，打短的會跑到內建那個，而且它在背景跑，matt-flow 看不到它跑過，commit 關卡也不會解開。matt-flow 給你的檢查指令都是全名。
 
 等級在面板上隨時可以換。第一步一定是 `/setup-matt-pocock-skills`，每個專案只要做一次：它會建立 `docs/agents/issue-tracker.md`，偵測到這個檔案就算通過。**沒做過 setup 的專案，軌道完全安靜**：不擋、不提示，也不附流程說明。
 
@@ -141,7 +143,7 @@ matt-flow 是一條軌道：它記得每個專案走到流程的哪一步，把�
 matt-flow：還沒到「動手做」。下一步是「把想法問清楚」：輸入 /grill-with-docs 加上你的想法；真的要跳過，先輸入 /matt-flow skip。
 ```
 
-這幾種指令照常執行，但流程不動：進行中這一步的指令再打一次、前面步驟的指令、不在這個等級裡的步驟（動手做的指令除外：別的等級的 `/implement`、`/implement-spec` 算這個等級的動手做），以及動手做開始之前輸入的 `/code-review`、`/pr`、`/retro`。
+這幾種指令照常執行，但流程不動：進行中這一步的指令再打一次、前面步驟的指令、不在這個等級裡的步驟（動手做的指令除外：別的等級的 `/implement`、`/implement-spec` 算這個等級的動手做），以及動手做開始之前輸入的 `/mattpocock-skills:code-review`、`/pr`、`/retro`。
 
 ### 交棒
 
@@ -167,7 +169,7 @@ markdown 檔、`docs/`、`.scratch/` 和專案外的檔案不算程式碼，所�
 
 ### commit 關卡
 
-新手和進階：每次你輸入 `/implement` 之後，要先跑過一次 code-review（你輸入 `/code-review`，或 Claude 透過 Skill 工具執行，例如 `/implement` 自己跑的那次），Claude 的 `git commit` 才會放行；review 之後的修正不用再 review 一次。被擋下時，`/code-review` 會預填在輸入框。動手做以外的 commit 一律放行，那時候 Claude 改得到的只有文件。高手不擋，`/implement-spec` 最後一步自己會 review。在新手或進階等級輸入 `/implement-spec` 時，它的分身（subagent）可以 commit 自己的任務卡，主線照樣要先 review。
+新手和進階：每次你輸入 `/implement` 之後，要先跑過一次 code-review（你輸入 `/mattpocock-skills:code-review`，或 Claude 透過 Skill 工具執行，例如 `/implement` 自己跑的那次），Claude 的 `git commit` 才會放行；review 之後的修正不用再 review 一次。被擋下時，`/mattpocock-skills:code-review` 會預填在輸入框。動手做以外的 commit 一律放行，那時候 Claude 改得到的只有文件。關卡只擋這個專案的 commit：每個 commit 用自己的 `git -C`、或前面的 `cd` 指到專案外面的絕對路徑時，不會被擋；用相對路徑、`~` 或變數寫的路徑，仍然算這個專案。高手不擋，`/implement-spec` 最後一步自己會 review。在新手或進階等級輸入 `/implement-spec` 時，它的分身（subagent）可以 commit 自己的任務卡，主線照樣要先 review。
 
 ### 跳過、結束、關掉
 
@@ -196,7 +198,7 @@ markdown 檔、`docs/`、`.scratch/` 和專案外的檔案不算程式碼，所�
 
 面板用來看進度：等級按鈕、目前的功能、每個步驟的狀態（✔ 通過、▶ 進行中、↷ 跳過、○ 還沒開始）、流程所在那一步的卡片、對話用掉多少 context，以及已完成的功能數。卡片是進行中的那一步，寫著怎樣算做完和之後的指令；沒有進行中的步驟時，卡片是下一步。卡片上有兩個按鈕：`↷ 跳過「步驟」`（跟 `/matt-flow skip` 一樣，按鈕上寫著會跳過哪一步）和 `? 我卡住了`（把 `/ask-matt` 放在輸入框最前面，附上你卡在哪一步、跳過了哪些步驟、現在什麼會被擋、幾天沒動；你打到一半的字會接在後面）。在終端機裡要先按 `ctrl+x tab` 進入面板，再按 `1`（跳過）或 `2`（我卡住了）。
 
-![面板：等級、每個步驟的狀態、下一步的卡片和 context 用量](docs/images/pane.png)
+![面板：等級、每個步驟的狀態、進行中那一步的卡片（跳過鍵寫著會跳過哪一步）和 context 用量](docs/images/pane.png)
 
 ![按「我卡住了」：/ask-matt 連同卡在哪一步、跳過了什麼、什麼會被擋、幾天沒動，一起預填進輸入框](docs/images/stuck.png)
 
@@ -252,6 +254,8 @@ scripts/typecheck
 ```
 
 `git config core.hooksPath .githooks` 每個 clone 執行一次：之後每次 commit 前都會自動跑 validate、測試和型別檢查，沒通過就不能 commit，你和 Claude 都一樣。型別檢查要先裝 Node.js（用 `npx` 跑 TypeScript），還要用到 Claude Code 的型別檔：它只在某個 session 載入過 plugin-authoring skill 之後才會出現，找不到時 `scripts/typecheck` 會說明並略過。
+
+改了狀態怎麼載入、關卡或軌道的程式，commit 前再跑一次 `scripts/live-check`。它會在暫時的專案裡用 Haiku 實際開一次 Claude Code，檢查三件事：跳步被擋下、`/matt-flow skip` 有記下、`/clear` 之後叫 Claude 改程式碼還是被擋。結束後印出結果和截圖的資料夾，暫時的專案和它留下的進度會自動清掉。每一步都等畫面出現證據才往下，最後從對話紀錄確認真的是關卡擋下的；Claude 那次沒去改檔案的話，會說沒檢查到，請再跑一次。要先裝 VHS 和 jq（`brew install vhs jq`），沒裝就會說明並略過；每跑一次會花一次 Haiku 呼叫，所以沒有放進 pre-commit。
 
 這個 repo 自己也用 matt-flow 管開發，所以在 clone 裡第一次叫 Claude 改程式碼會被擋下。這是正常的，照擋下訊息從流程的第一步開始就好。別的開發者沒有這個 repo 的 push 權限：先 fork，clone 自己的 fork 來改，最後發 PR 回來。
 

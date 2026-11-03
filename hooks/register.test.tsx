@@ -248,7 +248,7 @@ test('skip on the pane works like /matt-flow skip: it passes over the next step,
   await ui.press({ key: 'skip' })
   expect(toasts.at(-1)).toBe('↷ 跳過「檢查」→ 下一步 /retro')
   expect((await ui.find({ type: 'Text', text: /把想法問清楚/ }))?.text).toBe('✔ 2. 把想法問清楚')
-  expect((await ui.find({ type: 'Text', text: /檢查/ }))?.text).toBe('↷ 4. 檢查（跳過）')
+  expect((await ui.find({ type: 'Text', text: /4\. 檢查/ }))?.text).toBe('↷ 4. 檢查（跳過）')
   expect((await ui.find({ type: 'Text', text: /^[▶→] / }))?.text).toBe('▶ 3. 動手做（進行中）')
   await ui.unmount()
 })
@@ -347,7 +347,7 @@ test('a later step typed before building runs and moves nothing: building is not
   engine(on)
   await start($)
   await typed($, 'grill-with-docs')
-  expect((await typed($, 'code-review')).drop).toBeUndefined()
+  expect((await typed($, 'mattpocock-skills:code-review')).drop).toBeUndefined()
 
   expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
   expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
@@ -403,7 +403,7 @@ test('a feature is done once the person ends it with its retro under way: it cou
 
   await typed($, 'grill-with-docs')
   expect(await seen($, /進行中/)).toBe('功能進行中')
-  for (const skill of ['implement', 'code-review', 'retro']) await typed($, skill)
+  for (const skill of ['implement', 'mattpocock-skills:code-review', 'retro']) await typed($, skill)
   expect(await card($)).toBe('▶ 5. 複盤（進行中）')
   expect(await seen($, /之後/)).toBe('   複盤建議的環境改完之後：/matt-flow end')
   expect(await seen($, /已完成/)).toMatch(/已完成 0 個功能/)
@@ -416,7 +416,7 @@ test('a feature is done once the person ends it with its retro under way: it cou
 test('while the retro is under way code stays open for its changes, until the person ends the feature', async ($, on) => {
   const { toasts } = engine(on)
   await start($)
-  for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro']) await typed($, skill)
+  for (const skill of ['grill-with-docs', 'implement', 'mattpocock-skills:code-review', 'retro']) await typed($, skill)
 
   expect(toasts.at(-1)).toBe('✔ 檢查 通過 · ▶ 開始「複盤」：複盤建議的環境改完之後，下一步 /matt-flow end')
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
@@ -431,7 +431,7 @@ test('while the retro is under way code stays open for its changes, until the pe
 test('typing /grill-with-docs with the retro under way ends that feature done and starts the next', async ($, on) => {
   const { toasts } = engine(on)
   await start($)
-  for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro', 'grill-with-docs']) await typed($, skill)
+  for (const skill of ['grill-with-docs', 'implement', 'mattpocock-skills:code-review', 'retro', 'grill-with-docs']) await typed($, skill)
 
   expect(toasts.at(-1)).toBe('🎉 功能結束，已完成 1 個功能 · ▶ 開始「把想法問清楚」：問題問完之後，下一步 /implement')
   expect(await card($)).toBe('▶ 2. 把想法問清楚（進行中）')
@@ -443,7 +443,7 @@ test('the next command goes in the prompt box once the step is seen done: after 
   await start($)
   await typed($, 'grill-with-docs')
   await typed($, 'implement')
-  expect(toasts.at(-1)).toBe('✔ 把想法問清楚 通過 · ▶ 開始「動手做」：寫完之後，下一步 /code-review')
+  expect(toasts.at(-1)).toBe('✔ 把想法問清楚 通過 · ▶ 開始「動手做」：寫完之後，下一步 /mattpocock-skills:code-review')
   await turnEnds($)
   expect(suggested).toEqual([])
 
@@ -464,7 +464,7 @@ test('grilling and the retro are done when the person says so: neither offers th
   expect(toasts).toEqual(['▶ 開始「把想法問清楚」：問題問完之後，下一步 /implement'])
   expect(suggested).toEqual([])
 
-  for (const skill of ['implement', 'code-review', 'retro']) await typed($, skill)
+  for (const skill of ['implement', 'mattpocock-skills:code-review', 'retro']) await typed($, skill)
   await turnEnds($)
   expect(suggested).toEqual([])
 })
@@ -530,7 +530,7 @@ test('a step after the next one is dropped while building too, and the model jum
   await typed($, 'grill-with-docs')
   await typed($, 'implement')
 
-  expect((await typed($, 'retro')).drop).toMatch(/還沒到「複盤」。下一步是「檢查」：輸入 \/code-review；/)
+  expect((await typed($, 'retro')).drop).toMatch(/還沒到「複盤」。下一步是「檢查」：輸入 \/mattpocock-skills:code-review；/)
   expect((await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:retro' })).deny).toMatch(/還沒到「複盤」.*停下來/)
   expect(await card($)).toBe('▶ 3. 動手做（進行中）')
 })
@@ -704,7 +704,7 @@ test('a beginner building cannot commit until code-review runs, then every later
 
   expect((await bash($, 'git commit -m "wip"')).deny).toMatch(/code-review/)
   expect((await bash($, `git -C ${REPO} commit -m "wip"`)).deny).toMatch(/code-review/)
-  for (const options of ['--no-pager -c user.name=x --git-dir=.git', '--work-tree /w', '--git-dir repo/.git', '-C "/a b"']) {
+  for (const options of ['--no-pager -c user.name=x --git-dir=.git', '--work-tree /w', '--git-dir repo/.git', `-C "${REPO}/a b"`]) {
     expect((await bash($, `git ${options} commit -m "wip"`)).deny).toMatch(/code-review/)
   }
   await $.tool.call({ tool: 'Skill', skill: 'mattpocock-skills:code-review' })
@@ -718,11 +718,11 @@ test('an intermediate building waits for code-review too, the person typing it c
   for (const skill of ['grill-with-docs', 'to-spec', 'to-tickets', 'implement']) await typed($, skill)
 
   expect((await bash($, 'git commit -m "wip"')).deny).toMatch(/code-review/)
-  await typed($, 'code-review')
+  await typed($, 'mattpocock-skills:code-review')
   expect((await bash($, 'git commit -m "feat"')).deny).toBeUndefined()
 })
 
-test('a denied commit offers /code-review, and each /implement the person types wants its own review', async ($, on) => {
+test('a denied commit offers the review command, and each /implement the person types wants its own review', async ($, on) => {
   const { suggested } = engine(on)
   await start($)
   await typed($, 'grill-with-docs')
@@ -732,11 +732,44 @@ test('a denied commit offers /code-review, and each /implement the person types 
   const offered = suggested.length
   expect((await bash($, 'git commit -m "wip"')).deny).toBeDefined()
   await turnEnds($)
-  expect(suggested.slice(offered)).toEqual(['/code-review'])
-  await typed($, 'code-review')
+  expect(suggested.slice(offered)).toEqual(['/mattpocock-skills:code-review'])
+  await typed($, 'mattpocock-skills:code-review')
   expect((await bash($, 'git commit -m "first"')).deny).toBeUndefined()
   await typed($, 'implement')
   expect((await bash($, 'git commit -m "second"')).deny).toMatch(/code-review/)
+})
+
+test("the commit gate holds this project's commits only: one sent elsewhere by an absolute path goes", async ($, on) => {
+  engine(on)
+  await start($)
+  await typed($, 'grill-with-docs')
+  await typed($, 'implement')
+
+  for (const command of [
+    'git -C /elsewhere/repo commit -m "x"',
+    'cd /elsewhere/repo && git commit -m "x"',
+    'cd "/elsewhere/a b"; git commit -m "x"',
+    'mkdir -p /elsewhere/x\ncd /elsewhere/x && git init -q && git commit -m "x"',
+    '(cd /elsewhere/x && git commit -m "x")',
+  ]) {
+    expect((await bash($, command)).deny).toBeUndefined()
+  }
+  // Each commit's own folder decides: this project's, a relative one, ~ or a variable, or one the path only seems to leave.
+  for (const command of [
+    `git -C ${REPO}/hooks commit -m "x"`,
+    `cd ${REPO} && git commit -m "x"`,
+    'cd sub && git commit -m "x"',
+    'cd ~/x && git commit -m "x"',
+    'cd "$TMPDIR/x" && git commit -m "x"',
+    `cd /elsewhere/repo && git commit -m "x" && cd ${REPO} && git commit -m "y"`,
+    'git commit -m "x" && cd /elsewhere',
+    'git -C /elsewhere status && git commit -m "x"',
+    'git add . && make -C /elsewhere/b && git commit -m "x"',
+    'git commit -m "add the -C /tmp flag"',
+    `git -C /elsewhere/..${REPO} commit -m "x"`,
+  ]) {
+    expect((await bash($, command)).deny).toMatch(/code-review/)
+  }
 })
 
 test('commits outside building, and Bash that does not commit, always go', async ($, on) => {
@@ -867,7 +900,7 @@ test('while building, the rail locks only the commit, until code-review runs', a
   expect(text).not.toMatch(/改程式碼（Edit/)
   expect(text).not.toMatch(/仍可以/)
   expect(text).toMatch(/git commit.*code-review/)
-  expect((await typed($, 'code-review')).context?.join()).toMatch(/現在會被擋的動作：沒有/)
+  expect((await typed($, 'mattpocock-skills:code-review')).context?.join()).toMatch(/現在會被擋的動作：沒有/)
 })
 
 test('the rail rides along with a prompt only when it changed', async ($, on) => {
@@ -1036,7 +1069,7 @@ test('/matt-flow skip skips the step the flow stands on, and says what is next',
   expect(await flow($, 'skip')).toBe('↷ 跳過「把想法問清楚」→ 下一步 /implement')
   expect(await seen($, /進行中/)).toBe('功能進行中')
   expect((await edit($, 'src/app.ts')).deny).toMatch(/\/implement/)
-  expect(await flow($, 'skip')).toBe('↷ 跳過「動手做」→ 下一步 /code-review')
+  expect(await flow($, 'skip')).toBe('↷ 跳過「動手做」→ 下一步 /mattpocock-skills:code-review')
   expect((await edit($, 'src/app.ts')).deny).toBeUndefined()
 })
 
@@ -1055,7 +1088,7 @@ test('a feature ended before its retro is aborted and does not count; one ended 
   expect(await flow($, 'skip')).toBe('⏹ 功能中止：沒做到複盤，不算完成 → 下一個從 /grill-with-docs 開始')
 
   // A retro under way ran: skipping it, like ending the feature, finishes the feature done.
-  for (const skill of ['grill-with-docs', 'implement', 'code-review', 'retro']) await typed($, skill)
+  for (const skill of ['grill-with-docs', 'implement', 'mattpocock-skills:code-review', 'retro']) await typed($, skill)
   expect(await flow($, 'skip')).toBe('🎉 功能結束，已完成 1 個功能 → 下一個從 /grill-with-docs 開始')
 })
 
@@ -1173,7 +1206,7 @@ test('an intermediate building hands over both ways: the next ticket, or the ret
   // The next ticket is the step under way again; the retro waits for this build's code-review.
   expect((await typed($, 'implement')).drop).toBeUndefined()
   expect((await typed($, 'retro')).drop).toMatch(/「動手做」還沒做完：這次動手做還沒跑過 code-review。做完再輸入 \/retro/)
-  await typed($, 'code-review')
+  await typed($, 'mattpocock-skills:code-review')
   expect((await typed($, 'retro')).drop).toBeUndefined()
   expect(await card($)).toBe('▶ 6. 複盤（進行中）')
 })
@@ -1189,7 +1222,7 @@ test("an expert's /implement-spec hands over to /pr, not to another /implement",
 test('the feature takes the title of the first commit Claude makes while building, when no spec named it', async ($, on) => {
   engine(on, { commit: 'Add a login page' })
   await start($)
-  for (const skill of ['grill-with-docs', 'implement', 'code-review']) await typed($, skill)
+  for (const skill of ['grill-with-docs', 'implement', 'mattpocock-skills:code-review']) await typed($, skill)
   await bash($, 'git commit -m "Add a login page"')
 
   expect(await seen($, /進行中/)).toBe('功能「Add a login page」進行中')
@@ -1203,7 +1236,7 @@ test('a commit before building, one denied, or one that moved nothing names noth
   await bash($, 'git commit -m "Docs: a glossary"')
   await typed($, 'implement')
   await bash($, 'git commit -m "wip"')
-  await typed($, 'code-review')
+  await typed($, 'mattpocock-skills:code-review')
   await bash($, 'git commit --dry-run -m "wip"')
 
   expect(await seen($, /進行中/)).toBe('功能進行中')

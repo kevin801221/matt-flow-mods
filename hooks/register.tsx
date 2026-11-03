@@ -52,13 +52,14 @@ const STEPS = {
     title: '動手做',
     command: '/implement',
     skills: ['implement'],
-    what: 'AI 用測試先行的方式一小塊一小塊寫，寫完自己跑 /code-review 再 commit。',
+    what: 'AI 用測試先行的方式一小塊一小塊寫，寫完自己跑檢查再 commit。',
     tip: '任務卡很多的話，一次做一張，每張做完就 /clear。',
     criterion: '寫完',
   },
   review: {
     title: '檢查',
-    command: '/code-review',
+    // The full name: Claude Code has a /code-review of its own, which matt-flow cannot see.
+    command: '/mattpocock-skills:code-review',
     skills: ['code-review'],
     what: '對照專案規範和規格，從兩個方向檢查這次的改動。/implement 通常會自己跑這步。',
     tip: '檢查的 AI 只看 diff，不用重新摸索整個專案，所以抓得準。',
@@ -168,7 +169,30 @@ const unlockStep = (p: Progress) => (p.feature && nextStep(p, true)) || 'grill'
 // A `git commit`, past the options git takes first (`git -C dir commit`, `git --no-pager commit`).
 // ponytail: knows the options that take a separate value by name; an alias (`git ci`) or another such option gets past, add it when one shows.
 const GIT_COMMIT =
-  /\bgit(?:\s+(?:(?:-[cC]|--(?:git-dir|work-tree|namespace|exec-path|config-env))\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*\s+commit\b/
+  /\bgit((?:\s+(?:(?:-[cC]|--(?:git-dir|work-tree|namespace|exec-path|config-env))\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*)\s+commit\b/
+const unquote = (word: string) => word.replace(/^(["'])(.*)\1$/, '$2')
+// An absolute path with `.` and `..` folded away, so `/elsewhere/../repo` reads as `/repo`.
+const fold = (path: string) =>
+  `/${path.split('/').reduce<string[]>((parts, part) => (part === '..' ? parts.slice(0, -1) : part === '' || part === '.' ? parts : [...parts, part]), []).join('/')}`
+// Whether every commit in a command runs, by its own `git -C` or a `cd` before it, in a folder outside the project:
+// the gate holds this project's commits alone.
+// ponytail: a relative, `~` or `$VAR` folder counts as the project, and only `; & | ( )` and new lines part commands; resolve more when that blocks real work elsewhere.
+const isElsewhere = (root: string, command: string) => {
+  let dir: string | undefined
+  let commits = 0
+  for (const part of command.split(/&&|\|\||[;&|()\n]/)) {
+    const cd = /^\s*cd\s+("[^"]*"|'[^']*'|\S+)\s*$/.exec(part)?.[1]
+    if (cd !== undefined) dir = unquote(cd)
+    const options = GIT_COMMIT.exec(part)?.[1]
+    if (options === undefined) continue
+    commits += 1
+    const own = /-C\s+("[^"]*"|'[^']*'|\S+)/.exec(options)?.[1]
+    const at = own === undefined ? dir : unquote(own)
+    if (at === undefined || !at.startsWith('/') || `${fold(at)}/`.startsWith(`${root}/`)) return false
+  }
+
+  return commits > 0
+}
 // Beginners and intermediates commit what they build only after code-review has run.
 const isCommitLocked = (p: Progress) => p.level !== 'expert' && isBuilding(p) && !p.isReviewed
 // The retro under way ends with this: the feature is done then.
@@ -594,7 +618,7 @@ const locksOf = (p: Progress) => [
   ...(isBuilding(p)
     ? []
     : [{ action: '改程式碼（Edit、Write、NotebookEdit）', unlock: `由人輸入 ${STEPS[unlockStep(p)].command} 解鎖` }]),
-  ...(isCommitLocked(p) ? [{ action: 'git commit', unlock: '先跑 code-review（Skill 工具，或請人輸入 /code-review）' }] : []),
+  ...(isCommitLocked(p) ? [{ action: 'git commit', unlock: `先跑 code-review（Skill 工具，或請人輸入 ${STEPS.review.command}）` }] : []),
 ]
 
 // Why running `command` is denied, or undefined while it may go ahead. A subagent
@@ -602,12 +626,13 @@ const locksOf = (p: Progress) => [
 async function commitGate($: EngineInterface, command: string, isAgent: boolean) {
   if (!GIT_COMMIT.test(command)) return undefined
   await revive($)
-  if (await isQuiet($)) return undefined
+  const root = await read($, project)
+  if (root === null || (await isQuiet($)) || isElsewhere(root, command)) return undefined
   const p = await read($, progress)
   if ((isAgent && p.steps.parallel) || !isCommitLocked(p)) return undefined
   suggestion = STEPS.review.command
 
-  return 'matt-flow：這次動手做還沒跑過 code-review，先不能 commit。先用 Skill 工具跑 code-review（或請人輸入 /code-review），跑過之後的 commit 都會放行。不要繞過這個阻擋。'
+  return `matt-flow：這次動手做還沒跑過 code-review，先不能 commit。先用 Skill 工具跑 code-review（或請人輸入 ${STEPS.review.command}），跑過之後的 commit 都會放行。不要繞過這個阻擋。`
 }
 
 // Claude's own map of the rail, sent beside the person's prompt: where the flow
