@@ -1,6 +1,6 @@
 # ✦ matt-flow：Matt 導航
 
-Claude Code 的 mod（一種外掛）。讓 Claude 沿著 [Matt Pocock](https://github.com/mattpocock/skills) 的開發流程走：它知道目前在哪一步，想跳步時會被擋下，每一步結束時把下一步的指令交給你，按 Enter 就繼續。分新手、進階、高手三個等級，旁邊有看進度用的面板，`/matt-flow all` 還能一次看所有專案。
+Claude Code 的 mod（一種外掛）。讓 Claude 沿著 [Matt Pocock](https://github.com/mattpocock/skills) 的開發流程走：它知道目前在哪一步，想跳步時會被擋下，每一步結束時把下一步的指令交給你，按 Tab 收下就繼續。分新手、進階、高手三個等級，旁邊有看進度用的面板，`/matt-flow all` 還能一次看所有專案。
 
 **為什麼要用**：直接用 Claude Code，需求還沒問清楚它就開始改程式，做完也不一定檢查、複盤，流程全靠你自己記。Matt Pocock 把一套開發流程寫成了 skill：先追問到需求清楚，再寫測試和程式，接著檢查，最後複盤、改進下一次的環境。matt-flow 不加新的 skill，只讓你和 Claude 照這套流程的順序走。
 
@@ -147,7 +147,7 @@ matt-flow：還沒到「動手做」。下一步是「把想法問清楚」：�
 
 ### 交棒
 
-每一步開始時會跳出提示，寫明怎樣算做完和之後的指令。看得出這一步做完時，Claude 這次回覆完，下一步的指令會預填在輸入框，按 Enter 就啟動：
+每一步開始時會跳出提示，寫明怎樣算做完和之後的指令。看得出這一步做完時，Claude 這次回覆完，下一步的指令會以灰字預填在輸入框，按 Tab 收下、再按 Enter 啟動。Claude Code 自己的建議也是灰字，晚到時會蓋掉它，所以以狀態列為準：
 
 - setup 做完，預填 `/grill-with-docs`。
 - 規格書或任務卡寫出來，預填下一步。
